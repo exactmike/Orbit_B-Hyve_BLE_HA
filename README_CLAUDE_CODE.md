@@ -380,3 +380,36 @@ signal). No single position reached all four; `03` is weakly visible from almost
   valves, ESP32 BT proxy for range + always‑on scanning).
 - Real water on a real spigot: test with short durations; the device enforces the run
   timer on‑device (that's also the safety auto‑close).
+
+---
+
+## 13. HA Integration — Current Surface & What RX Unlocks (2026‑06‑17 PM)
+
+**What the integration exposes today** (`custom_components/orbit_bhyve_ble/`):
+- **Platforms:** `switch` only (`__init__.py`: `PLATFORMS = [Platform.SWITCH]`). No
+  sensor / binary_sensor / valve platform.
+- **Devices:** one HA device per config entry (per MAC). Device info is **hardcoded
+  XD‑shaped** (`switch.py`): model `"B‑Hyve XD (HT‑34)"`, `sw_version "0107"` — so fw‑`111`
+  single‑station valves currently **mislabel**. Our fleet = 4 config entries (one per valve,
+  `num_zones=1`) → 4 devices, one switch each.
+- **Entities:** one switch per zone (`Zone 1..N`), `unique_id bhyve_<mac>_zone_<n>`, attrs
+  `zone` + `duration`.
+
+**Key limitation — state is OPTIMISTIC, never read from the valve.** `turn_on` sets
+`is_on=True` locally and schedules an auto‑off via `call_later(duration)` (`switch.py`).
+The device is **TX‑only**: `bhyve_device._send_command` connects → sends → waits 2 s →
+disconnects; RX notifications are **never subscribed to or decoded**. So HA is blind to the
+real valve state, the on‑device auto‑close firing, physical‑button or app actuation,
+**battery**, signal, clock, rain‑delay/schedule. HA stays wrong until its next command.
+
+**Does cracking RX (the open §8 thread) add NEW functionality? Yes — two distinct wins:**
+1. **New telemetry entities** (sensor/binary_sensor): **battery %** (these are 2×AA valves —
+   high value), likely RSSI, device clock, possibly rain‑delay/flow. None can exist today.
+2. **Real state feedback:** the switch stops guessing — HA reflects actual open/closed,
+   catches auto‑close and out‑of‑band actuation, and confirms commands landed. Turns a
+   one‑way remote into a true two‑way integration. (Arguably the bigger correctness win.)
+
+Neither is possible with TX alone ⇒ RX decode is the gate for both. The integration already
+routes through HA's Bluetooth manager (`async_ble_device_from_address`), so the planned
+**ESP32 BT proxies** (§10.1) supply both the range *and* the always‑connected listener that
+make passively reading those RX notifications practical.
