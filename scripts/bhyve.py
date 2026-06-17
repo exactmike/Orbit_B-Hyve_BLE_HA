@@ -146,8 +146,18 @@ def aes_encrypt(key, iv, counter, plaintext):
         block = iv + struct.pack("<I", counter)
         keystream = Cipher(algorithms.AES(key), modes.ECB()).encryptor().update(block)
         result.extend(b ^ k for b, k in zip(chunk, keystream[:len(chunk)]))
-        counter = (counter + 1) % 0xFFFFFFFF
+        counter = (counter + 1) % 0x100000000  # 2^32, per-block counter wrap
     return bytes(result), counter
+
+
+def compute_trailer(plaintext):
+    """2-byte outer-frame trailer: uint16_LE(sum(plaintext) + 0x11 + len).
+
+    Matches custom_components/orbit_bhyve_ble/bhyve_device.py and docs/encryption.md.
+    The 0x11 is the BLE frame magic header byte; `len` is the frame length byte.
+    """
+    total = sum(plaintext) + 0x11 + len(plaintext)
+    return struct.pack("<H", total & 0xFFFF)
 
 
 # ─── Message Building ────────────────────────────────────────────────────
@@ -297,13 +307,22 @@ def cmd_setup(args):
 # ─── BLE Control ─────────────────────────────────────────────────────────
 
 async def ble_command(mac, network_key, command, zones=None, duration=600):
-    from bleak import BleakClient
+    from bleak import BleakClient, BleakScanner
 
     key = bytes.fromhex(network_key)
-    print(f"Connecting to {mac}...")
+    print(f"Scanning for {mac}...")
+    device = await BleakScanner.find_device_by_address(mac, timeout=25.0)
+    if device is None:
+        print(f"{mac} not found — is it awake (press the button) and in range?")
+        return
+    print("Found. Connecting...")
 
-    async with BleakClient(mac, timeout=15.0) as client:
-        await client._backend._acquire_mtu()
+    async with BleakClient(device, timeout=15.0) as client:
+        # _acquire_mtu() exists only on the BlueZ (Linux) backend; Windows
+        # negotiates MTU automatically, so call it only if present.
+        acquire_mtu = getattr(client._backend, "_acquire_mtu", None)
+        if acquire_mtu is not None:
+            await acquire_mtu()
         print(f"Connected (MTU={client.mtu_size})")
 
         notifications = []
@@ -325,27 +344,27 @@ async def ble_command(mac, network_key, command, zones=None, duration=600):
                 protobuf = build_start_protobuf(zone - 1, duration)
                 message = build_message(protobuf)
                 ct, counter = aes_encrypt(key, iv, counter, message)
-                frame = build_ble_frame(ct, b"\x80\x04")
-                await client.write_gatt_char(WRITE_CHAR, frame, response=True)
-                mins = duration // 60
-                secs = duration % 60
+                frame = build_ble_frame(ct, compute_trailer(message))
+                await client.write_gatt_char(WRITE_CHAR, frame, response=False)
+                mins, secs = duration // 60, duration % 60
                 time_str = f"{mins}m{secs}s" if secs else f"{mins}m"
-                print(f"Zone {zone} ON for {time_str} — accepted!")
+                print(f"Zone {zone} ON for {time_str} — sent!")
 
         elif command == "off":
             protobuf = build_stop_protobuf()
             message = build_message(protobuf)
             ct, counter = aes_encrypt(key, iv, counter, message)
-            frame = build_ble_frame(ct, b"\x80\x03")
-            await client.write_gatt_char(WRITE_CHAR, frame, response=True)
-            print("All zones STOPPED — accepted!")
+            frame = build_ble_frame(ct, compute_trailer(message))
+            await client.write_gatt_char(WRITE_CHAR, frame, response=False)
+            print("All zones STOPPED — sent!")
 
         await asyncio.sleep(3)
         if notifications:
             print(f"Device confirmed ({len(notifications)} response(s))")
+        else:
+            print("No confirmation notification received.")
         await client.stop_notify(READ_CHAR)
         print("Done.")
-
 
 def cmd_control(args):
     config = load_config()
