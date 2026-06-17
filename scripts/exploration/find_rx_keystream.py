@@ -121,7 +121,7 @@ def search(key, init_tx, rx, frames, span):
     base = struct.unpack("<I", init_tx[12:16])[0]
     candidates = build_iv_candidates(init_tx, rx)
     counters = counter_window(base, span)
-    print(f"Searching {len(candidates)} IV constructions × {len(counters)} counters "
+    print(f"Searching {len(candidates)} IV constructions x {len(counters)} counters "
           f"per frame (base_counter={base})...\n")
 
     hits = []
@@ -201,7 +201,7 @@ def main():
     if hits:
         names = {h[0] for h in hits}
         print(f"Found RX keystream(s). IV construction(s): {', '.join(sorted(names))}")
-        print("If consistent across frames, that's the device→host scheme.")
+        print("If consistent across frames, that's the device->host scheme.")
     else:
         print("No structured IV matched. Next: the RX counter may be flash-stored")
         print("(arbitrary) with the TX IV — widen --span — or RX uses a derived key.")

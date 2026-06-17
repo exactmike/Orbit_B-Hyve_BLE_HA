@@ -40,8 +40,8 @@ timer (upstream: `wxfield/Orbit_B-Hyve_4Port_Controller`; reference device: XD 4
 part **24634**, FCC **ML6‑HT34BT**, hardware **HT34A‑0001**, firmware **0107**).
 
 End state:
-1. ✅ A CLI that starts/stops watering on each single‑station valve. *(start confirmed;
-   stop not yet hardware‑verified — see §11.)*
+1. ✅ A CLI that starts/stops watering on each single‑station valve. *(start **and stop**
+   hardware‑verified on `BTValve03`; cross‑device on/off still TODO — see §11.)*
 2. A Home Assistant integration exposing each valve, with battery/state **if** we crack
    the RX path (§8).
 3. **Backwards‑compatible** changes structured as a clean fork and, ideally, an upstream
@@ -71,6 +71,11 @@ but — now confirmed — the **control protocol is identical** (§0).
 ### ✅ Solved / confirmed working this session
 - **Start watering actuates the valve.** The original "sent, no actuation, no
   confirmation" symptom was the wrong outer‑frame trailer; see §6.
+- **Stop closes the valve (hardware‑verified 2026‑06‑17, `BTValve03`).** A single‑session
+  start→hold(15 s)→stop closed the valve at ~15 s, well before the 120 s on‑device timer,
+  so the *stop command* (not the auto‑close) shut it. Stop used the **continued** session
+  counter (start consumed 2 blocks). The device emitted a fresh RX burst at the moment of
+  stop (state‑change report). Tool: `scripts/exploration/verify_stop.py`.
 - GATT service `fe32` + chars `6c71` (AES init) / `6c72` (TX) / `6c73` (RX notify) present.
 - CLI connects, negotiates MTU (247), AES session‑init round‑trips, sends a command, and
   the valve **physically actuates**.
@@ -83,7 +88,15 @@ but — now confirmed — the **control protocol is identical** (§0).
 - **RX notifications do not decrypt with the TX keystream.** Outer framing is identical
   (`0x11 | len | ciphertext | trailer`, length bytes valid), but neither the TX IV nor a
   ±counter window decodes them → device→host uses a different IV and/or counter (§7, §8).
-- **Stop command** built/sent but not yet hardware‑verified to close the valve (§11).
+- **Cross‑device on/off** — start+stop proven on `BTValve03` only; not yet on a second
+  valve (§11 step 2). **Blocked by range (2026‑06‑17):** a full BLE scan from the desktop
+  adapter sees **only `BTValve03`** (`44:67:55:1A:FA:64`, rssi ≈ −79); `BTValve01`
+  (`…:FA:38`) and the other two never appear even after a button press. The desktop adapter
+  can't reach the installed valves ⇒ cross‑device verification needs a valve moved into
+  range or an **ESP32 BT proxy** (the planned HA end‑state, §12).
+- **Sleep/advertising (partial):** `BTValve03` keeps advertising for **many minutes** after
+  its last command with no re‑wake needed, so repeated tests "just work" without a button
+  press. A cold valve out of range can't be distinguished from a sleeping one here (§11.3).
 - Valve **sleep/advertising** behavior still uncharacterized (matters for HA on‑demand
   connect / scheduled watering).
 
@@ -186,10 +199,20 @@ correct decrypt without assuming RX structure).
   structured IV constructions (ordered arrangements of the handshake's 4‑byte chunks)
   × a counter window, against the captured RX frames, using the trailer oracle. The real
   session's handshake + 5 RX frames are **embedded** as defaults.
-  - **Next action:** `python3 find_rx_keystream.py --device 4` (the key for the device
-    that produced the embedded capture). The TX self‑check must print `PASS` first.
-  - Same IV name across all 5 frames ⇒ that's the RX scheme (decode the protobuf to learn
-    what the valve reports). No match ⇒ widen `--span`, or RX uses a derived key.
+  - **RAN 2026‑06‑17 — INCONCLUSIVE (no RX scheme found).** TX self‑check `PASS`, but the
+    per‑frame "hits" are **16‑bit‑oracle noise, not a real scheme**: 120 IVs × 1088
+    counters ≈ 130 k candidates/frame vs. a 16‑bit trailer ⇒ ~2 random collisions/frame
+    expected. The hits used *different* IV constructions (`A+Z+E`, `D+E+C`, `B+D+E`) at
+    *unrelated* counter offsets, none had a recognizable header, and the two long frames
+    (0, 4) matched nothing. A **strengthened joint test** (one IV, counter advancing by
+    block‑count across all 5 frames = ~80‑bit oracle, ±8192 window) found **nothing**; no
+    single handshake‑derived IV decodes all frames at base. ⇒ **RX is NOT a rearrangement
+    of handshake chunks with a near‑base counter.** Remaining: derived RX key, or
+    arbitrary flash‑stored counter (only reliably searchable *jointly*, too slow in pure
+    Python) → **best next move is a real app capture** (§10), now feasible.
+- **`verify_stop.py`** — live: single‑session start→hold→stop on the **continued** counter,
+  with RX capture across both commands. Used to hardware‑verify stop (§3). `--device N`,
+  `--zone`, `--duration` (safety auto‑close), `--hold` (seconds open before stop).
 
 These are **research tooling and deliberately self‑contained**; they must not become a
 dependency of the shipping CLI (see §9).
@@ -287,8 +310,13 @@ frames are not secret; only the key is). Key facts:
 1. **Crack RX:** run `find_rx_keystream.py --device 4`; if it hits, decode the RX protobuf
    to identify status/battery/time fields. If it stalls, widen `--span` or reconsider a
    derived RX key / arbitrary counter (then a real app capture, §10).
-2. **Hardware‑verify `stop`** (`retest_live.py --device 4 --stop`) and at least one other
-   valve, so on/off across devices is proven — not just zone‑on on one unit.
+2. **Hardware‑verify `stop`** — ✅ DONE on `BTValve03` via `verify_stop.py --device 4`
+   (start→hold→stop, closed early). **Still TODO:** run on at least one other valve
+   (e.g. `verify_stop.py --device 2` = `BTValve01`) so on/off across devices is proven.
+   *Blocked from the desktop by range (only `BTValve03` is reachable).* **Next session is
+   planned from a laptop** that can be moved into range of the other valves — this also
+   re‑tests from a **different control endpoint/BT adapter** (confirms the protocol isn't
+   host‑specific). Run `verify_stop.py --device 2` (and `--hold 30`) there.
 3. **Characterize sleep/advertising** (interval/duration after a button press, hub
    unplugged) — determines whether HA can connect on demand or needs an always‑on BT proxy.
 4. **Then** do the §9 additive refactor (typed devices, hub off‑by‑one) and wire the HA
