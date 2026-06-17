@@ -4,7 +4,7 @@
 > what we're doing, what's now **solved**, what's still **open**, and the order to
 > tackle it. Read top to bottom before changing code.
 >
-> **Last updated:** 2026‑06‑17.
+> **Last updated:** 2026‑06‑17 (laptop field session — all four valves verified).
 
 ---
 
@@ -14,6 +14,15 @@
   blocker was a **hardcoded outer‑frame trailer** in `scripts/bhyve.py`; computing
   it from the message fixed it. **Verified on real hardware** (valve `BTValve03`,
   `zone 1 ON 30s` physically actuated).
+- ✅ **Cross‑device + cross‑host PROVEN (2026‑06‑17 PM, laptop).** Start **and** stop
+  hardware‑verified on **all four valves** (`BTValve01`/`02`/`03`/`04`) from a **second
+  control host** (Windows laptop, different BT adapter) — confirms the protocol is not
+  host‑ or unit‑specific. TX frames self‑decode (trailer/CRC OK) and the stop‑time RX
+  burst signature is identical across every valve. Closes the old §11 step 2.
+- ✅ **Valves advertise while idle without a button press.** All four were discovered
+  and driven cold (no wake). `BTValve04` only *appeared* to be asleep from the desk —
+  it was purely **range** (showed up at ‑64…‑78 dBm once approached, still un‑woken).
+  See §10.1 for the RSSI survey + BT‑proxy siting.
 - ✅ **Single‑station (fw `111`) speaks the SAME BLE protocol as the XD 4‑port
   (fw `0107`) for control.** Same framing, same cipher, same `timerMode` protobuf,
   `stationId = 0` for the single station. No per‑firmware protocol profile is needed
@@ -88,12 +97,10 @@ but — now confirmed — the **control protocol is identical** (§0).
 - **RX notifications do not decrypt with the TX keystream.** Outer framing is identical
   (`0x11 | len | ciphertext | trailer`, length bytes valid), but neither the TX IV nor a
   ±counter window decodes them → device→host uses a different IV and/or counter (§7, §8).
-- **Cross‑device on/off** — start+stop proven on `BTValve03` only; not yet on a second
-  valve (§11 step 2). **Blocked by range (2026‑06‑17):** a full BLE scan from the desktop
-  adapter sees **only `BTValve03`** (`44:67:55:1A:FA:64`, rssi ≈ −79); `BTValve01`
-  (`…:FA:38`) and the other two never appear even after a button press. The desktop adapter
-  can't reach the installed valves ⇒ cross‑device verification needs a valve moved into
-  range or an **ESP32 BT proxy** (the planned HA end‑state, §12).
+- ~~**Cross‑device on/off**~~ — ✅ **DONE (2026‑06‑17 PM, laptop).** Start+stop verified on
+  all four valves (§0). The earlier desktop "only sees `BTValve03`" was a desktop‑adapter
+  **range** limit, not a protocol issue — the laptop reached every valve once moved into
+  range (§10.1). An **ESP32 BT proxy** is still the HA end‑state for always‑on range (§12).
 - **Sleep/advertising (partial):** `BTValve03` keeps advertising for **many minutes** after
   its last command with no re‑wake needed, so repeated tests "just work" without a button
   press. A cold valve out of range can't be distinguished from a sleeping one here (§11.3).
@@ -214,6 +221,15 @@ correct decrypt without assuming RX structure).
   with RX capture across both commands. Used to hardware‑verify stop (§3). `--device N`,
   `--zone`, `--duration` (safety auto‑close), `--hold` (seconds open before stop).
 
+- **`scan_rssi.py`** (NEW 2026‑06‑17 PM) — BLE scan that labels the known valves from the
+  config and reports **RSSI**, sorted, so you can walk the property and site BT proxies
+  (§10.1). `--time N` for longer scans.
+
+**Windows console note:** the frame dumps print Unicode (`→`, `✓`); a stock Windows console
+is cp1252 and raised `UnicodeEncodeError` *after* a command was already sent. Fixed by a
+one‑time UTF‑8 `reconfigure` guard in **`decode_frame.py`** (every probe imports it before
+printing, so the single guard covers them all). Shipping `bhyve.py` was left untouched.
+
 These are **research tooling and deliberately self‑contained**; they must not become a
 dependency of the shipping CLI (see §9).
 
@@ -305,15 +321,41 @@ frames are not secret; only the key is). Key facts:
 
 ---
 
+## 10.1 Valve Sites & RSSI Survey (2026‑06‑17 PM, for BT‑proxy siting)
+
+Physical layout (3 sites, not 4 problems):
+- **`BTValve01` + `BTValve02`** — *same* spigot (a splitter); one proxy covers both.
+- **`BTValve03`** — on the office desk inside the garage (central, indoors; bleeds into
+  almost every scan).
+- **`BTValve04`** — far corner; its own site.
+
+RSSI walk with `scripts/exploration/scan_rssi.py` (reads valve MACs from config, sorts by
+signal). No single position reached all four; `03` is weakly visible from almost everywhere:
+
+| Position | 01 | 02 | 03 | 04 |
+|---|---|---|---|---|
+| Indoors (start) | seen | seen | seen | — |
+| 02/03 cluster | — | −53 | −67 | — |
+| Toward 04 | −80 | — | −71 | −78 |
+| At `BTValve04` | — | — | −90 | −56 |
+| House corner near 04 | — | −89 | −77 | −64 |
+
+**Proxy plan:** ~**two ESP32 BT proxies** — one near the **01/02 spigot**, one at the
+**house corner near 04** (that corner also reaches `03` at −77; the 01/02 spigot is only
+−89 from there, too marginal to share). `03` is covered by anything in/near the garage.
+
+---
+
 ## 11. Next Steps (suggested order)
 
 1. **Crack RX:** run `find_rx_keystream.py --device 4`; if it hits, decode the RX protobuf
    to identify status/battery/time fields. If it stalls, widen `--span` or reconsider a
    derived RX key / arbitrary counter (then a real app capture, §10).
-2. **Hardware‑verify `stop`** — ✅ DONE on `BTValve03` via `verify_stop.py --device 4`
-   (start→hold→stop, closed early). **Still TODO:** run on at least one other valve
-   (e.g. `verify_stop.py --device 2` = `BTValve01`) so on/off across devices is proven.
-   *Blocked from the desktop by range (only `BTValve03` is reachable).* **Next session is
+2. **Hardware‑verify `stop` across devices** — ✅ **FULLY DONE (2026‑06‑17 PM, laptop).**
+   `verify_stop.py --device {2,3,5} --hold 30` confirmed start+stop on `BTValve01`,
+   `BTValve02`, `BTValve04` (plus the original `BTValve03`) — all four valves, from the
+   laptop adapter, each found cold (no wake). Range, not protocol, gated the desktop. ↓↓↓
+   *(historical context below — superseded by the above)* **Next session is
    planned from a laptop** that can be moved into range of the other valves — this also
    re‑tests from a **different control endpoint/BT adapter** (confirms the protocol isn't
    host‑specific). Run `verify_stop.py --device 2` (and `--hold 30`) there.

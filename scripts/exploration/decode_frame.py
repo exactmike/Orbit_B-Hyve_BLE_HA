@@ -37,6 +37,16 @@ import argparse
 import struct
 import sys
 
+# Frame dumps print Unicode (→, ✓, ✗); Windows consoles default to cp1252 and
+# raise UnicodeEncodeError mid-report. Force UTF-8 so a live run never dies after
+# the command was already sent. Done here because every probe imports this module
+# (before it prints), so this single guard covers them all. Idempotent/best-effort.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 MSG_HEADER = bytes([0xAA, 0x77, 0x5A, 0x0F])
