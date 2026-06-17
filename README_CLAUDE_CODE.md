@@ -20,8 +20,9 @@
   for start/stop. (This collapses most of the old §7 hypotheses.)
 - ✅ **Network key is correct** (H1 settled): our TX frame self‑decrypts to a valid
   inner message and the valve obeys it.
-- ✅ **Fix committed:** branch `fix/ble-trailer-winrt`, commit `888da05`
-  (`scripts/bhyve.py` only). **Not pushed** to any remote yet.
+- ✅ **Fix committed & pushed:** branch `fix/ble-trailer-winrt`, commit `888da05`
+  (`scripts/bhyve.py` only), on the fork. Pending an upstream PR. Fork workflow and
+  branch roles are in §9.1.
 - 🔎 **Main open thread:** device→host (RX) notifications on `6c73` use a **different
   keystream** than host→device (TX). The valve is *talkative* (5 notifications within
   0.28 s of a start command — almost certainly status/battery/time). Decoding RX gives
@@ -231,6 +232,42 @@ saying "yes" with minimal friction:
 
 ---
 
+## 9.1 Branch Strategy & Remotes (fork workflow)
+
+**Remotes:**
+- `origin` → **your fork**, `https://github.com/exactmike/Orbit_B-Hyve_BTLE_HA.git`
+  (note the fork is renamed vs upstream). Push here.
+- `upstream` → **original**, `https://github.com/wxfield/Orbit_B-Hyve_4Port_Controller.git`.
+  Fetch updates / target PRs here.
+
+**Long-lived branches:**
+- **`main`** — kept **pristine, in sync with `upstream/main`**. Never commit feature
+  work directly here; it's the clean base for upstream PRs.
+  Sync: `git fetch upstream && git merge --ff-only upstream/main && git push`.
+- **`production`** — **your private integration line** (pushed to the fork). Carries the
+  fix + fork-internal RE tooling + merged features. **This is what you run from.** Never
+  PR'd upstream.
+
+**Topic branches — base depends on destination:**
+- **Upstream-bound** fix/feature (`fix/*`, `feat/*`) → branch off **`main`** (clean, no
+  tooling cruft). Merge into `production` for your own use **and** open a PR to `upstream`
+  from the branch. Keep PRs surgical (if a branch has drifted, cherry-pick just the
+  feature's commits onto a fresh branch off `upstream/main`).
+- **Research/dev** (`research/*`) — needs the RE tools, not upstreamed as-is → branch off
+  **`production`** (so the tools in `scripts/exploration/` are present). Merge findings
+  back to `production`.
+
+**Rule of thumb:** *branch off `main` to propose upstream; branch off `production` to do
+research/dev.*
+
+**Current branches:**
+- `fix/ble-trailer-winrt` (`888da05`) — pushed; pending upstream PR.
+- `production` (`78017da`) — pushed; integration line (fix + dev tooling).
+- `research/rx-keystream` — **active** research branch off `production` for the RX keystream
+  work (§8/§10). New session should start here.
+
+---
+
 ## 10. Captured Reference Data (this session)
 
 Embedded as defaults in `scripts/exploration/find_rx_keystream.py` (handshake + 5 RX
@@ -256,7 +293,7 @@ frames are not secret; only the key is). Key facts:
    unplugged) — determines whether HA can connect on demand or needs an always‑on BT proxy.
 4. **Then** do the §9 additive refactor (typed devices, hub off‑by‑one) and wire the HA
    integration; consider committing the `exploration/` tools as their own tracked commit.
-5. **Push** `fix/ble-trailer-winrt` and open the PR when ready (not pushed yet).
+5. **Open the upstream PR** for `fix/ble-trailer-winrt` (already pushed) when ready.
 
 ---
 
