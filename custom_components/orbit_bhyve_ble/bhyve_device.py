@@ -68,7 +68,7 @@ class BHyveDevice:
                 algorithms.AES(self.network_key), modes.ECB()
             ).encryptor().update(block)
             result.extend(b ^ k for b, k in zip(chunk, keystream[:len(chunk)]))
-            counter = (counter + 1) % 0xFFFFFFFF
+            counter = (counter + 1) % 0x100000000  # 2^32, per-block counter wrap
         return bytes(result), counter
 
     def _build_message(self, protobuf: bytes) -> bytes:
