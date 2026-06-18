@@ -44,12 +44,21 @@ class BHyveZoneSwitch(SwitchEntity):
         self._attr_name = f"Zone {zone}"
         self._attr_icon = "mdi:sprinkler"
 
+        # Label by zone count — the only model signal available without decoding the
+        # device's RX telemetry. sw_version is intentionally omitted: firmware differs
+        # per model (0107 on the XD 4-port, 111 on single-station valves) and can't be
+        # read until the RX path is decoded.
+        model = {
+            1: "B-Hyve Single Zone Device",
+            2: "B-Hyve 2 Zone Device",
+            4: "B-Hyve 4 Zone Device",
+        }.get(device.num_zones, f"B-Hyve {device.num_zones} Zone Device")
+
         self._attr_device_info = {
             "identifiers": {(DOMAIN, device.address)},
             "name": f"B-Hyve {device.address[-5:]}",
             "manufacturer": "Orbit Irrigation",
-            "model": "B-Hyve XD (HT-34)",
-            "sw_version": "0107",
+            "model": model,
         }
 
     @property

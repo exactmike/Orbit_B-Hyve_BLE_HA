@@ -73,7 +73,13 @@ class BHyveBLEConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({
             vol.Required(CONF_ADDRESS, default=self._address or ""): str,
             vol.Required(CONF_NETWORK_KEY): str,
-            vol.Optional(CONF_NUM_ZONES, default=DEFAULT_NUM_ZONES): vol.In([1, 2, 4]),
+            # Coerce before validating: when the user actively selects an option the
+            # frontend returns it as a string (e.g. "1"), which a bare vol.In([1, 2, 4])
+            # (ints) rejects with "value must be one of [1, 2, 4]". Coercing to int both
+            # fixes that and guarantees num_zones is stored as an int in entry.data.
+            vol.Optional(CONF_NUM_ZONES, default=DEFAULT_NUM_ZONES): vol.All(
+                vol.Coerce(int), vol.In([1, 2, 4])
+            ),
         })
 
         return self.async_show_form(
