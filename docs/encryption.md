@@ -1,6 +1,6 @@
 # Encryption: Custom AES-ECB-as-CTR Construction
 
-This document describes the AES construction used by the Orbit B-Hyve XD on its data-channel BLE characteristic, plus the content-dependent trailer checksum that protects each frame's integrity.
+This document describes the AES construction used by the Orbit B-Hyve XD on its data-channel BLE characteristic, plus the content-dependent trailer checksum that protects each frame's integrity. The same construction and trailer apply unchanged to single-station B-Hyve valves (firmware `111`), confirmed against hardware.
 
 ## Cipher Construction
 

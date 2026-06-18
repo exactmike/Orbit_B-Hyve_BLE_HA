@@ -2,6 +2,8 @@
 
 Technical reference for the Orbit B-Hyve XD BLE protocol as observed and reconstructed during the project. For the narrative of how this was figured out, see [`reverse_engineering_journey.md`](reverse_engineering_journey.md).
 
+> Single-station B-Hyve hose valves (firmware `111`) use the **same** GATT service, framing, cipher, CRC, and trailer described here — confirmed against hardware. They differ only in having a single zone (`stationId = 0`).
+
 ## GATT Service & Characteristics
 
 The device advertises one custom GATT service:

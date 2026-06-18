@@ -1,19 +1,30 @@
-# Orbit B-Hyve XD 4-Port Bluetooth Sprinkler Controller
+# Orbit B-Hyve Bluetooth Sprinkler Controller
 
-**Local BLE control for the Orbit B-Hyve XD Bluetooth hose timer — no cloud, no app, no Wi-Fi hub.**
+**Local BLE control for Orbit B-Hyve Bluetooth hose timers — no cloud, no app, no Wi-Fi hub.**
 
-> **STATUS:** All 4 zones controllable from Home Assistant. Custom AES encryption decoded, frame trailer checksum algorithm reverse-engineered.
+> **STATUS:** All zones controllable from Home Assistant. Custom AES encryption decoded, frame trailer checksum algorithm reverse-engineered. Verified on the XD 4-port timer and on single-station hose valves — start/stop are hardware-verified on both.
 
-| | |
-|---|---|
-| Device | Orbit B-Hyve XD Bluetooth Hose Faucet Timer |
-| Part Number | 24634 |
-| FCC ID | ML6-HT34BT |
-| Firmware Tested | 0107 |
-| Hardware | HT34A-0001 |
-| Protocol | BLE GATT, AES-128 (custom CTR mode), CRC-16 CCITT inner, 16-bit sum trailer |
+### Supported devices
 
-> ⚠️ **DO NOT UPDATE YOUR B-HYVE DEVICE FIRMWARE.** This integration was reverse-engineered against firmware 0107. A firmware update could change the encryption protocol or trailer algorithm and break compatibility. If the official B-Hyve app prompts you to update, **decline it.**
+The BLE control protocol (framing, AES cipher, CRC, and trailer checksum) is **identical**
+across these models — single-station valves speak the same protocol as the XD 4-port, just
+with one zone (`stationId = 0`).
+
+| | XD 4-Port (reference) | Single-station valve |
+|---|---|---|
+| Device | B-Hyve XD Bluetooth Hose Faucet Timer | B-Hyve single-port Bluetooth hose timer |
+| Part Number | 24634 | 21205 |
+| FCC ID | ML6-HT34BT | ML6-HT25G2 |
+| MCU | — | Nordic nRF52833 |
+| Firmware Tested | 0107 | 111 |
+| Hardware | HT34A-0001 | HT25G2 |
+| Zones | 4 | 1 |
+
+Protocol: BLE GATT, AES-128 (custom CTR mode), CRC-16 CCITT inner, 16-bit sum trailer.
+
+When adding a single-station valve in Home Assistant, set **Number of zones = 1**.
+
+> ⚠️ **DO NOT UPDATE YOUR B-HYVE DEVICE FIRMWARE.** This integration was reverse-engineered against firmware 0107 (XD 4-port) and 111 (single-station valves). A firmware update could change the encryption protocol or trailer algorithm and break compatibility. If the official B-Hyve app prompts you to update, **decline it.**
 
 ---
 
