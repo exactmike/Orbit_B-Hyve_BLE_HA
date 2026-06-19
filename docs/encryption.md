@@ -20,8 +20,9 @@ The B-Hyve uses **AES-128 in a custom CTR-style mode**, implemented manually usi
 
 ```
 # Per-session setup (after the 20-byte 6c71 init exchange):
-IV       = rx_response[:4] || init_tx[4:12]      # 12 bytes
-Counter  = uint32_LE(init_tx[12:16])             # initial counter
+IV          = rx_response[:4] || init_tx[4:12]   # 12 bytes; SAME for both directions
+Counter_TX  = uint32_LE(init_tx[12:16])          # host->device initial counter
+Counter_RX  = uint32_LE(init_tx[16:20])          # device->host initial counter
 
 # Per-block keystream:
 Block_in   = IV || uint32_LE(Counter)            # 16 bytes
@@ -43,12 +44,15 @@ The construction is functionally equivalent to AES-CTR with a specific nonce/cou
 The 20-byte write to characteristic `0x6c71` establishes the session IV and counter. The bytes are:
 
 ```
-init_tx = [ rx_seed_bytes (4) | iv_seed (8) | counter_LE (4) | reserved (4) ]
+init_tx = [ host_seed (4) | iv_seed (8) | counter_TX_LE (4) | counter_RX_LE (4) ]
 ```
 
 - The first 4 bytes are not used to derive the session IV directly; they are echoed-and-modified by the device in its response.
 - Bytes 4–11 (8 bytes) are used as the second half of the 12-byte session IV.
-- Bytes 12–15 (4 bytes, little-endian uint32) become the initial counter.
+- Bytes 12–15 (4 bytes, little-endian uint32) become the **host→device (TX)** initial counter.
+- Bytes 16–19 (4 bytes, little-endian uint32) become the **device→host (RX)** initial counter.
+  (These were long thought "reserved"; an official-app capture proved they seed the RX
+  counter — see *Device→Host Direction* below.)
 - Byte 11 (the last byte of the IV-seed range) is **always written as `0x00`** by the application. The device may reject otherwise.
 
 The device's 20-byte response to the read of `0x6c71` contains:
@@ -64,6 +68,28 @@ session_IV = rx_response[:4] || init_tx[4:12]
 ```
 
 This is 12 bytes total, used as the high-order portion of every keystream block.
+
+### Device→Host Direction (RX notifications on `0x6c73`)
+
+Device→host notifications use the **same session IV** as host→device, but a **separate
+counter** seeded from `init_tx[16:20]` (little-endian uint32). The two directions thus run
+independent CTR streams off one shared IV:
+
+```
+Counter_TX = uint32_LE(init_tx[12:16])    # advances per 16-byte block, host->device only
+Counter_RX = uint32_LE(init_tx[16:20])    # advances per 16-byte block, device->host only
+```
+
+Each direction's counter advances by the block-count of every frame it sends, independent
+of the other direction. Each RX notification is a complete inner message (`AA 77 5A 0F …
+CRC16`) with its own outer trailer — RX is not fragmented across notifications the way long
+host→device messages are.
+
+This was confirmed against an official-app capture (`BTValve03`, fw `0111`): all 17 RX
+notifications in one session decrypt to valid `AA775A0F`/CRC-OK protobuf when, and only
+when, the RX counter starts at `uint32_LE(init_tx[16:20])`. The decoded telemetry includes
+device clock, battery voltage (≈2690 mV for 2×AA), model/firmware, zone/program names, and
+run-state reports.
 
 ## Inner Message Integrity (CRC-16 CCITT)
 

@@ -67,6 +67,42 @@ After decryption, the inner message is itself wrapped:
 - **protobuf bytes** — encoded `OrbitPbApi_Message` (or `OrbitPbApi_IpcMsg`); see [`../protobuf/orbit_ble.proto`](../protobuf/orbit_ble.proto).
 - **CRC-16 CCITT** — checksum over the protobuf bytes only, using the standard CCITT polynomial `0x1021` and lookup table.
 
+## Device→Host (RX) Notifications
+
+Notifications on `0x6c73` use the same outer frame and inner-message format as host→device,
+encrypted with the **same session IV but a separate counter** seeded from `init_tx[16:20]`
+(see [`encryption.md`](encryption.md)). Each notification is a **complete** inner message
+(`AA775A0F … CRC16`) — unlike long host→device messages, RX is not fragmented across
+notifications.
+
+### RX message wrapper
+
+Every decoded RX protobuf shares an outer wrapper, then carries exactly one payload field
+whose **field number selects the message type**:
+
+```
+#1  bytes(6)  device MAC (e.g. 44:67:55:1a:fa:64)
+#7  varint    device clock, Unix epoch seconds
+#N  message   one payload submessage; N identifies the type (table below)
+```
+
+### Observed RX message types (capture: BTValve03, fw `0111`, one app session)
+
+| `#N` | Meaning (observed) | Key inner fields |
+|---|---|---|
+| `#16` | **Device status / state** (pushed on connect and on every state change) | `#1` mode (`1`=idle, `4`=manual running); `#10` next-event Unix ts; `#13 {#1, #3 last-event ts, #4}`; **`#14 {#3 = battery mV}`**; `#16` 8-byte constant token |
+| `#46` | **Battery report** (standalone) | `#3 = battery mV` (same `{#3: mV}` shape as `#16.#14`) |
+| `#23` | **Device info** | `#2` model string (`HT25G2-0001`); `#3` firmware string (`0111`) |
+| `#19` | **Program / schedule** | `#10`, `#11` Unix ts; `#17` program name (UTF-8, e.g. `"Blueberries And Strawberries"`) |
+| `#59` | **Watering status** (periodic) | `#1` active flag (`0` = not watering); `#3` |
+| `#30` / `#31` | **Command ack / flag** (small, around start/stop) | `#1`/`#6` boolean-ish |
+
+Battery is the highest-value field for Home Assistant: it appears both standalone (`#46`)
+and inside the status block (`#16.#14.#3`), encoded in millivolts (observed `2690` ≈ 2.69 V,
+consistent with 2×AA). Treat the exact field semantics above as **reconstructed, not
+vendor-confirmed** — they match one session and should be re-verified against the app UI
+(battery %, next-run time) before being surfaced as authoritative.
+
 ## Notes on Behavior
 
 - **No BLE bonding.** The device does not write to the host's `bt_config.conf` paired-devices table. It does not enforce link-layer pairing or LE Secure Connections.
