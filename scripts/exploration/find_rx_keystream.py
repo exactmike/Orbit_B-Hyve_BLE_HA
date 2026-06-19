@@ -2,6 +2,14 @@
 """
 B-Hyve RX Keystream Finder (offline brute over structured IV candidates).
 
+*** SOLVED 2026-06-19 — see rx_joint_brute.py and docs/encryption.md. ***
+RX uses the SAME IV as TX (rx_response[:4] || init_tx[4:12]) with a SEPARATE counter
+base = uint32_LE(init_tx[16:20]) (the last 4 init bytes, once thought "reserved"). This
+brute never found it because the IV was never the variable and the RX counter base sits
+~667M away from the TX base, far outside any counter window searched here. Kept for the
+historical search record; rx_joint_brute.py is the tool that cracked it from a full
+official-app capture.
+
 Context: host→device (TX) frames decrypt with
     IV      = rx_response[:4] || init_tx[4:12]
     counter = uint32_LE(init_tx[12:16])

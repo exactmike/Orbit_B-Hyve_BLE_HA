@@ -4,7 +4,7 @@
 > what we're doing, what's now **solved**, what's still **open**, and the order to
 > tackle it. Read top to bottom before changing code.
 >
-> **Last updated:** 2026‑06‑17 (laptop field session — all four valves verified).
+> **Last updated:** 2026‑06‑19 (RX keystream SOLVED from an official‑app capture).
 
 ---
 
@@ -32,10 +32,15 @@
 - ✅ **Fix committed & pushed:** branch `fix/ble-trailer-winrt`, commit `888da05`
   (`scripts/bhyve.py` only), on the fork. Pending an upstream PR. Fork workflow and
   branch roles are in §9.1.
-- 🔎 **Main open thread:** device→host (RX) notifications on `6c73` use a **different
-  keystream** than host→device (TX). The valve is *talkative* (5 notifications within
-  0.28 s of a start command — almost certainly status/battery/time). Decoding RX gives
-  Home Assistant real battery/state. Tooling + captured data are ready (see §8, §10).
+- ✅ **RX (device→host) keystream SOLVED (2026‑06‑19).** From an **official‑app capture**
+  (`tshark` JSON, `BTValve03`), all 17 RX notifications in one session decode to CRC‑valid
+  protobuf. RX uses the **same IV as TX** (`rx_response[:4] || init_tx[4:12]`) with a
+  **separate counter base = `uint32_LE(init_tx[16:20])`** — the last 4 init bytes, long
+  mislabeled "reserved". Decoded telemetry: device clock, **battery ≈2690 mV (2×AA)**,
+  model/fw, zone/program names, run‑state. Closes the old §8 thread. Crypto written into
+  `docs/encryption.md`; RX message catalog in `docs/ble_protocol.md`.
+- 🎯 **Next thread:** wire RX into the HA integration (subscribe `6c73`, decode with the RX
+  counter, add battery + real‑state entities) — see §11/§13. **Deferred to a new session.**
 - 🎯 **Standing priority across all work: keep changes upstream‑PR‑acceptable** (§9).
 
 ---
@@ -94,9 +99,11 @@ but — now confirmed — the **control protocol is identical** (§0).
   2: manualParams { 3: stationInfo { 1: stationId=0, 2: runTimeSec=30 } } }`.
 
 ### 🔎 Open
-- **RX notifications do not decrypt with the TX keystream.** Outer framing is identical
-  (`0x11 | len | ciphertext | trailer`, length bytes valid), but neither the TX IV nor a
-  ±counter window decodes them → device→host uses a different IV and/or counter (§7, §8).
+- ~~**RX notifications do not decrypt with the TX keystream.**~~ ✅ **SOLVED 2026‑06‑19.**
+  Same IV as TX; separate counter base `uint32_LE(init_tx[16:20])`. All 17 app‑capture RX
+  frames decode CRC‑valid (§5, §7, §8). The earlier brutes failed because they swept the
+  counter near the *TX* base — the RX base sits ~667M away, carried literally in the
+  handshake. Remaining RX work is the **HA integration**, not the protocol (§11/§13).
 - ~~**Cross‑device on/off**~~ — ✅ **DONE (2026‑06‑17 PM, laptop).** Start+stop verified on
   all four valves (§0). The earlier desktop "only sees `BTValve03`" was a desktop‑adapter
   **range** limit, not a protocol issue — the laptop reached every valve once moved into
@@ -118,7 +125,10 @@ scripts/bhyve.py                     # standalone CLI (FIXED this session; commi
 scripts/exploration/                 # research probes (RE tooling lives here)
   decode_frame.py                    #   NEW: offline frame decrypt + protobuf dump
   retest_live.py                     #   NEW: live send + RX capture + decode
-  find_rx_keystream.py               #   NEW: offline brute to recover the RX keystream
+  find_rx_keystream.py               #   offline RX brute (SUPERSEDED; RX now solved)
+  extract_capture.py                 #   NEW: pull GATT frames from a tshark JSON export
+  rx_joint_brute.py                  #   NEW: joint RX-counter search (cracked RX, 2026-06-19)
+  captures/                          #   reference captures (ciphertext+handshake; no keys)
 docs/encryption.md                   # cipher + trailer + CRC (source of truth)
 docs/ble_protocol.md                 # GATT map + frame format
 protobuf/orbit_ble.proto             # partial reconstructed schema (NOT the start msg)
@@ -146,8 +156,10 @@ truth — read them before changing the protocol layer.
   XOR with plaintext; counter increments per 16‑byte block; **wraps at 2³²**.
 - **Host→device (TX) session params:** `IV = rx_response[:4] || init_tx[4:12]` (12 bytes);
   `counter = uint32_LE(init_tx[12:16])`. Init write quirk: `init_tx[11] = 0x00`.
-- **Device→host (RX) session params:** **UNKNOWN / different from TX.** This is the open
-  problem (§7/§8). Outer framing is the same; only the keystream derivation differs.
+- **Device→host (RX) session params (SOLVED 2026‑06‑19):** **same IV as TX**, separate
+  counter `counter = uint32_LE(init_tx[16:20])`. Each direction advances its own counter by
+  block‑count; each RX notification is a complete inner message (not fragmented). So the
+  20‑byte init write carries **two** counter seeds: `[12:16]` TX, `[16:20]` RX.
 
 ---
 
@@ -183,10 +195,11 @@ intertwined in the same hunks and were validated together by the live actuation.
   message works on fw `111`.
 - **H4 (TX counter/IV handshake differs): ✅ DISPROVEN for TX.** Standard derivation works.
 - **H‑trailer (NEW, was the real cause): ✅ CONFIRMED & FIXED.**
-- **H‑RX (NEW, still open): device→host uses a different keystream.** Prime suspect is a
-  **seed swap** — RX IV leads with the *host* seed (`init_tx[:4]`) instead of the *device*
-  seed (`rx[:4]`), i.e. candidate `B+C+D` vs the TX `A+C+D`. Other possibilities: an
-  RX‑specific counter base (incl. flash‑stored/arbitrary), or a derived RX key. See §8.
+- **H‑RX: ✅ CONFIRMED & SOLVED (2026‑06‑19).** Not a seed swap and not a derived key — the
+  RX IV is **identical to TX** (`A+C+D`); only the **counter base differs**, and it was
+  hiding in the handshake as `uint32_LE(init_tx[16:20])`. Proven by all 17 RX frames of an
+  official‑app capture decoding CRC‑valid. The brutes missed it because they searched IV
+  rearrangements with counters near the TX base; the RX base is ~667M away. See §5/§8.
 
 ---
 
@@ -206,17 +219,21 @@ correct decrypt without assuming RX structure).
   structured IV constructions (ordered arrangements of the handshake's 4‑byte chunks)
   × a counter window, against the captured RX frames, using the trailer oracle. The real
   session's handshake + 5 RX frames are **embedded** as defaults.
-  - **RAN 2026‑06‑17 — INCONCLUSIVE (no RX scheme found).** TX self‑check `PASS`, but the
-    per‑frame "hits" are **16‑bit‑oracle noise, not a real scheme**: 120 IVs × 1088
-    counters ≈ 130 k candidates/frame vs. a 16‑bit trailer ⇒ ~2 random collisions/frame
-    expected. The hits used *different* IV constructions (`A+Z+E`, `D+E+C`, `B+D+E`) at
-    *unrelated* counter offsets, none had a recognizable header, and the two long frames
-    (0, 4) matched nothing. A **strengthened joint test** (one IV, counter advancing by
-    block‑count across all 5 frames = ~80‑bit oracle, ±8192 window) found **nothing**; no
-    single handshake‑derived IV decodes all frames at base. ⇒ **RX is NOT a rearrangement
-    of handshake chunks with a near‑base counter.** Remaining: derived RX key, or
-    arbitrary flash‑stored counter (only reliably searchable *jointly*, too slow in pure
-    Python) → **best next move is a real app capture** (§10), now feasible.
+  - **SUPERSEDED — RX SOLVED 2026‑06‑19 (see new tools below).** This brute correctly
+    concluded RX is *not* a handshake‑chunk IV rearrangement with a near‑base counter — and
+    it was right: the IV equals the TX IV, and the **counter base** (`uint32_LE(init_tx
+    [16:20])`) sits ~667M from the TX base, outside every window this tool searched. Header
+    note added; kept for the historical record.
+
+- **`extract_capture.py`** (NEW 2026‑06‑19) — parse a `tshark` JSON export (`-T json`, raw
+  bytes) into the init handshake + ordered TX/RX frames. Handle map for the app capture:
+  `0x000d`=6c71, `0x000f`=6c72, `0x0011`=6c73. Defaults to the bundled capture.
+- **`rx_joint_brute.py`** (NEW 2026‑06‑19, **the tool that cracked RX**) — batched‑AES joint
+  search: requires ALL RX frames of a session to decode (trailer‑valid) under one IV with a
+  single advancing counter. A targeted check of handshake‑derived counters found
+  `uint32_LE(init_tx[16:20])` → all 17 frames CRC‑valid. Bundled capture:
+  `exploration/captures/20260619_app_btvalve03.json` (handshake + ciphertext only; **no
+  key** — decode still needs the local config key).
 - **`verify_stop.py`** — live: single‑session start→hold→stop on the **continued** counter,
   with RX capture across both commands. Used to hardware‑verify stop (§3). `--device N`,
   `--zone`, `--duration` (safety auto‑close), `--hold` (seconds open before stop).
@@ -348,9 +365,19 @@ signal). No single position reached all four; `03` is weakly visible from almost
 
 ## 11. Next Steps (suggested order)
 
-1. **Crack RX:** run `find_rx_keystream.py --device 4`; if it hits, decode the RX protobuf
-   to identify status/battery/time fields. If it stalls, widen `--span` or reconsider a
-   derived RX key / arbitrary counter (then a real app capture, §10).
+1. **Crack RX** — ✅ **DONE (2026‑06‑19).** Solved from an official‑app `tshark` capture:
+   RX IV = TX IV, counter base = `uint32_LE(init_tx[16:20])`. Tooling:
+   `exploration/extract_capture.py` + `exploration/rx_joint_brute.py`; capture at
+   `exploration/captures/20260619_app_btvalve03.json`. **Next on RX is the HA integration
+   below — the protocol is settled.**
+   1a. **Wire RX into HA (NEXT SESSION'S PRIORITY).** In `bhyve_device.py`, after sending,
+       subscribe to `6c73`, decrypt notifications with the RX counter, parse the protobuf,
+       and surface telemetry. Add `sensor`/`binary_sensor` platforms for **battery**
+       (`#16.#14.#3` / `#46.#3`, mV) and **real watering state** (`#16.#1`: 1=idle/4=running;
+       `#59.#1`), plus optional device clock / fw / program name. Field catalog in
+       `docs/ble_protocol.md`. Keep it additive + upstream‑acceptable (§9); the integration
+       already routes through HA's BT manager, so ESP32 active proxies (§10.1) make passive
+       listening practical. Re‑verify field semantics against the app UI before shipping.
 2. **Hardware‑verify `stop` across devices** — ✅ **FULLY DONE (2026‑06‑17 PM, laptop).**
    `verify_stop.py --device {2,3,5} --hold 30` confirmed start+stop on `BTValve01`,
    `BTValve02`, `BTValve04` (plus the original `BTValve03`) — all four valves, from the
@@ -402,7 +429,8 @@ disconnects; RX notifications are **never subscribed to or decoded**. So HA is b
 real valve state, the on‑device auto‑close firing, physical‑button or app actuation,
 **battery**, signal, clock, rain‑delay/schedule. HA stays wrong until its next command.
 
-**Does cracking RX (the open §8 thread) add NEW functionality? Yes — two distinct wins:**
+**Does decoding RX (now SOLVED, §8) add NEW functionality? Yes — two distinct wins, and the
+protocol blocker is gone — only the HA wiring remains:**
 1. **New telemetry entities** (sensor/binary_sensor): **battery %** (these are 2×AA valves —
    high value), likely RSSI, device clock, possibly rain‑delay/flow. None can exist today.
 2. **Real state feedback:** the switch stops guessing — HA reflects actual open/closed,
