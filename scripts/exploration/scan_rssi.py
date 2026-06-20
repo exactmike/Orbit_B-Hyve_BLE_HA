@@ -3,11 +3,11 @@
 B-Hyve RSSI survey — scan and report signal strength for the known valves.
 
 Purpose: map where each valve's signal is reachable (and how strong) from a
-given spot, to decide where ESP32 BT proxies need to go for full HA coverage
-(brief §12). Run it from several locations; compare the RSSI column.
+given spot, to decide where ESP32 BT proxies need to go for full HA coverage.
+Run it from several locations; compare the RSSI column.
 
-Reads the device list from scripts/.bhyve_config.json so valves are shown by
-name (BTValve01..04, hub). Anything not in the config is listed below as "other"
+Reads the device list from the configured B-Hyve config (via $BHYVE_CONFIG) so
+valves are shown by name. Anything not in the config is listed below as "other"
 so you can still see what's around. Higher (less negative) RSSI = stronger.
 
     python3 scan_rssi.py            # 10s scan
