@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 H_INIT, H_TX, H_RX = "0x000d", "0x000f", "0x0011"
-DEFAULT_CAP = Path(__file__).resolve().parent / "captures" / "20260619_app_btvalve03.json"
+DEFAULT_CAP = Path(__file__).resolve().parent / "captures" / "20260619_app_single_station.json"
 
 
 def _first(d, k):

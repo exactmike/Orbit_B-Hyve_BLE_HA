@@ -20,7 +20,7 @@ builders (for send fidelity) and decode_frame.py's decoders (for RX analysis).
 
 Usage:
     python3 retest_live.py --device 2 --zone 1 --duration 30
-    python3 retest_live.py --mac 44:67:55:1A:FA:64 --key <32hex> --zone 1 --duration 30
+    python3 retest_live.py --mac 44:67:55:XX:XX:XX --key <32hex> --zone 1 --duration 30
     python3 retest_live.py --device 2 --stop          # send the stop command instead
 
 ⚠️  Real water on a real spigot — use a short duration; the device enforces it.

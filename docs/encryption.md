@@ -85,7 +85,7 @@ of the other direction. Each RX notification is a complete inner message (`AA 77
 CRC16`) with its own outer trailer — RX is not fragmented across notifications the way long
 host→device messages are.
 
-This was confirmed against an official-app capture (`BTValve03`, fw `0111`): all 17 RX
+This was confirmed against an official-app capture (B-Hyve 21205 single-station valve, fw `0111`): all 17 RX
 notifications in one session decrypt to valid `AA775A0F`/CRC-OK protobuf when, and only
 when, the RX counter starts at `uint32_LE(init_tx[16:20])`. The decoded telemetry includes
 device clock, battery voltage (≈2690 mV for 2×AA), model/firmware, zone/program names, and
@@ -121,7 +121,7 @@ def compute_trailer(plaintext: bytes, length: int) -> bytes:
     return struct.pack("<H", total & 0xFFFF)
 ```
 
-In this codebase the implementation lives in `custom_components/orbit_bhyve_ble/bhyve_device.py` (`BHyveDevice._compute_trailer`) and in `scripts/bhyve_control.py`.
+In this codebase the implementation lives in `custom_components/orbit_bhyve_ble/bhyve_device.py` (`BHyveDevice._compute_trailer`) and in `scripts/bhyve.py`.
 
 ### Why this trailer matters
 

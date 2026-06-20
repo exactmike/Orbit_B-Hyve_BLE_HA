@@ -23,7 +23,7 @@ import decode_frame as dec
 import extract_capture as ex
 
 CAP = sys.argv[1] if len(sys.argv) > 1 else \
-    str(Path(__file__).resolve().parent / "captures" / "20260619_app_btvalve03.json")
+    str(Path(__file__).resolve().parent / "captures" / "20260619_app_single_station.json")
 KEY = bytes.fromhex(bh.load_config()["devices"][3]["network_key"])
 
 init_tx, init_rx, tx, rx = ex.load(CAP)

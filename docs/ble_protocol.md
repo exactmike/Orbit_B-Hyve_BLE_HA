@@ -67,6 +67,25 @@ After decryption, the inner message is itself wrapped:
 - **protobuf bytes** — encoded `OrbitPbApi_Message` (or `OrbitPbApi_IpcMsg`); see [`../protobuf/orbit_ble.proto`](../protobuf/orbit_ble.proto).
 - **CRC-16 CCITT** — checksum over the protobuf bytes only, using the standard CCITT polynomial `0x1021` and lookup table.
 
+## Host→Device (TX) Command Messages
+
+Commands are encoded as the same `OrbitPbApi_*` protobuf, wrapped in the inner message and
+outer frame described above, and written to `0x6c72`. The validated control commands are
+reconstructed from `scripts/bhyve.py` (`build_start_protobuf` / `build_stop_protobuf`).
+
+| Command | Protobuf (field tree) | Wire bytes |
+|---|---|---|
+| **Start watering** | `#14 timerMode { #1 mode=2 (manual); #2 manualParams { #3 stationInfo { #1 stationId; #2 runTimeSec } } }` | varies with `stationId` / `runTimeSec` |
+| **Stop watering** | `#14 timerMode { #1 = 2; #2 manualParams {} (empty) }` | `72 04 08 02 12 00` |
+
+- **Station addressing.** `stationId = zone − 1`. Single-station valves use `stationId = 0`;
+  the XD 4-port uses `0–3`. `runTimeSec` is the run duration in seconds.
+- **Stop** is the same `timerMode` message with an **empty** `manualParams` (no
+  `stationInfo`), which halts the active run.
+
+As with the RX table below, treat these field semantics as **reconstructed and
+behaviorally-validated** (the valve physically actuates), not vendor-confirmed.
+
 ## Device→Host (RX) Notifications
 
 Notifications on `0x6c73` use the same outer frame and inner-message format as host→device,
@@ -81,12 +100,12 @@ Every decoded RX protobuf shares an outer wrapper, then carries exactly one payl
 whose **field number selects the message type**:
 
 ```
-#1  bytes(6)  device MAC (e.g. 44:67:55:1a:fa:64)
+#1  bytes(6)  device MAC (e.g. 44:67:55:XX:XX:XX — Orbit OUI 44:67:55)
 #7  varint    device clock, Unix epoch seconds
 #N  message   one payload submessage; N identifies the type (table below)
 ```
 
-### Observed RX message types (capture: BTValve03, fw `0111`, one app session)
+### Observed RX message types (capture: B-Hyve 21205 single-station valve, fw `0111`, one app session)
 
 | `#N` | Meaning (observed) | Key inner fields |
 |---|---|---|
