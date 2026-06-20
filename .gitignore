@@ -42,6 +42,10 @@ config.json
 secrets.yaml
 /scripts/.bhyve_config.json
 
+# Local-only working brief (imports the real brief from the sibling
+# Local_Orbit_B-Hyve_BLE_HA directory, which lives outside the repo).
+/CLAUDE.md
+
 # Captures & logs (may contain device-specific data)
 *.btsnoop
 *.pcap

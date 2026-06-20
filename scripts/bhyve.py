@@ -36,7 +36,11 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # ─── Configuration ───────────────────────────────────────────────────────
 
-CONFIG_FILE = Path(__file__).parent / ".bhyve_config.json"
+# Config location: $BHYVE_CONFIG overrides; otherwise the legacy in-repo path.
+# Keeping secrets out of the repo tree is the documented setup (point
+# $BHYVE_CONFIG at a file outside the checkout); the in-repo path stays as a
+# backwards-compatible fallback for existing users.
+CONFIG_FILE = Path(os.environ.get("BHYVE_CONFIG") or (Path(__file__).parent / ".bhyve_config.json"))
 
 ORBIT_API_BASE = "https://api.orbitbhyve.com/v1"
 ORBIT_APP_ID = "Bhyve-App"
