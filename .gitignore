@@ -46,6 +46,9 @@ secrets.yaml
 # Local_Orbit_B-Hyve_BLE_HA directory, which lives outside the repo).
 /CLAUDE.md
 
+# Local MCP server config (machine-specific).
+/.mcp.json
+
 # Captures & logs (may contain device-specific data)
 *.btsnoop
 *.pcap
