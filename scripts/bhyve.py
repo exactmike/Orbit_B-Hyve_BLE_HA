@@ -526,6 +526,105 @@ def cmd_setup(args):
 
 # ─── BLE Control ─────────────────────────────────────────────────────────
 
+class _RxCollector:
+    """Collects RX notifications on 6c73 and decodes them with the RX counter.
+
+    Notifications can arrive before the session is derived, so raw frames are kept
+    and decoded once `arm()` supplies the key/IV/RX-counter. `event` fires on the
+    first CRC-valid decode so callers can use a bounded `wait_for` instead of a
+    fixed sleep.
+    """
+
+    def __init__(self):
+        self.key = self.iv = self.rx_counter = None
+        self.raw = []        # every raw notification (bytes)
+        self.decoded = []    # CRC-valid inner messages (decode_inner dicts)
+        self.event = asyncio.Event()
+
+    def arm(self, key, iv, rx_counter):
+        self.key, self.iv, self.rx_counter = key, iv, rx_counter
+        for raw in self.raw:          # decode anything buffered pre-arm
+            self._decode(raw)
+
+    def handle(self, _sender, data):
+        raw = bytes(data)
+        self.raw.append(raw)
+        if self.rx_counter is not None:
+            self._decode(raw)
+
+    def _decode(self, raw):
+        parsed = parse_ble_frame(raw)
+        if parsed is None:
+            return
+        _, ct, _ = parsed
+        _c, _pt, inner = decrypt_frame(self.key, self.iv, ct, self.rx_counter)
+        if inner and inner["crc_ok"]:
+            self.decoded.append(inner)
+            self.event.set()
+
+    def merged_status(self):
+        """Combine telemetry across decoded frames (types carry different fields)."""
+        run_state = is_watering = battery_mv = device_clock = None
+        for inner in self.decoded:
+            st = extract_status(inner["protobuf"])
+            run_state = st.run_state if st.run_state is not None else run_state
+            is_watering = st.is_watering if st.is_watering is not None else is_watering
+            battery_mv = st.battery_mv if st.battery_mv is not None else battery_mv
+            device_clock = st.device_clock if st.device_clock is not None else device_clock
+        return DeviceStatus(run_state, is_watering, battery_mv, device_clock)
+
+
+def _format_status(st):
+    parts = []
+    if st.is_watering is not None:
+        parts.append("watering" if st.is_watering else "idle")
+    if st.run_state is not None:
+        parts.append(f"run_state={st.run_state}")
+    if st.battery_mv is not None:
+        parts.append(f"battery {st.battery_mv} mV")
+    if st.device_clock is not None:
+        parts.append(f"clock {st.device_clock}")
+    return ", ".join(parts) if parts else "no decodable telemetry"
+
+
+async def _await_rx(collector, first_timeout, drain=1.5):
+    """Wait (bounded) for the first decoded RX frame, then drain the burst briefly.
+
+    The first frame after a command is a small ack (clock only); the richer #16
+    state push (run-state + battery) follows a beat later, and battery can arrive
+    as a separate #46 frame — so drain a moment after the first to merge them.
+    """
+    try:
+        await asyncio.wait_for(collector.event.wait(), timeout=first_timeout)
+    except asyncio.TimeoutError:
+        return
+    await asyncio.sleep(drain)
+
+
+async def _connect(client):
+    """Shared connect step: BlueZ-only MTU acquire (guarded), print MTU."""
+    # _acquire_mtu() exists only on the BlueZ (Linux) backend; Windows
+    # negotiates MTU automatically, so call it only if present.
+    acquire_mtu = getattr(client._backend, "_acquire_mtu", None)
+    if acquire_mtu is not None:
+        await acquire_mtu()
+    print(f"Connected (MTU={client.mtu_size})")
+
+
+async def _init_session(client, key, collector):
+    """Subscribe to RX, run the AES session init, arm the collector, return iv/counter."""
+    await client.start_notify(READ_CHAR, collector.handle)
+    init_tx = bytearray(os.urandom(20))
+    init_tx[11] = 0x00
+    init_tx = bytes(init_tx)
+    await client.write_gatt_char(AES_CHAR, init_tx)
+    rx = await client.read_gatt_char(AES_CHAR)
+    iv, counter, rx_counter = derive_session(init_tx, rx)
+    collector.arm(key, iv, rx_counter)
+    print("Session established")
+    return iv, counter
+
+
 async def ble_command(mac, network_key, command, zones=None, duration=600):
     from bleak import BleakClient, BleakScanner
 
@@ -538,26 +637,9 @@ async def ble_command(mac, network_key, command, zones=None, duration=600):
     print("Found. Connecting...")
 
     async with BleakClient(device, timeout=15.0) as client:
-        # _acquire_mtu() exists only on the BlueZ (Linux) backend; Windows
-        # negotiates MTU automatically, so call it only if present.
-        acquire_mtu = getattr(client._backend, "_acquire_mtu", None)
-        if acquire_mtu is not None:
-            await acquire_mtu()
-        print(f"Connected (MTU={client.mtu_size})")
-
-        notifications = []
-        await client.start_notify(READ_CHAR, lambda s, d: notifications.append(d))
-
-        # AES session init
-        init_tx = bytearray(os.urandom(20))
-        init_tx[11] = 0x00
-        init_tx = bytes(init_tx)
-        await client.write_gatt_char(AES_CHAR, init_tx)
-        rx = await client.read_gatt_char(AES_CHAR)
-
-        iv = rx[:4] + init_tx[4:12]
-        counter = struct.unpack("<I", init_tx[12:16])[0]
-        print("Session established")
+        await _connect(client)
+        collector = _RxCollector()
+        iv, counter = await _init_session(client, key, collector)
 
         if command == "on":
             for zone in zones:
@@ -578,13 +660,51 @@ async def ble_command(mac, network_key, command, zones=None, duration=600):
             await client.write_gatt_char(WRITE_CHAR, frame, response=False)
             print("All zones STOPPED — sent!")
 
-        await asyncio.sleep(3)
-        if notifications:
-            print(f"Device confirmed ({len(notifications)} response(s))")
+        # Wait (bounded) for the device's confirmation, then decode it — fast
+        # devices return immediately, a silent one exits on the timeout.
+        await _await_rx(collector, first_timeout=4.0)
+        if collector.decoded:
+            print(f"Confirmed: {_format_status(collector.merged_status())}")
+        elif collector.raw:
+            print(f"Device responded ({len(collector.raw)} notification(s)) but none decoded.")
         else:
             print("No confirmation notification received.")
         await client.stop_notify(READ_CHAR)
         print("Done.")
+
+
+async def ble_status(mac, network_key):
+    from bleak import BleakClient, BleakScanner
+
+    key = bytes.fromhex(network_key)
+    print(f"Scanning for {mac}...")
+    device = await BleakScanner.find_device_by_address(mac, timeout=25.0)
+    if device is None:
+        print(f"{mac} not found — is it awake (press the button) and in range?")
+        return
+    print("Found. Connecting...")
+
+    async with BleakClient(device, timeout=15.0) as client:
+        await _connect(client)
+        collector = _RxCollector()
+        await _init_session(client, key, collector)
+        print("Waiting for status push...")
+
+        # The device pushes a status (#16) on connect; wait (bounded) for it.
+        await _await_rx(collector, first_timeout=6.0)
+        await client.stop_notify(READ_CHAR)
+
+        if collector.decoded:
+            print(f"Status: {_format_status(collector.merged_status())}")
+        elif collector.raw:
+            print(f"Received {len(collector.raw)} notification(s) but none decoded.")
+        else:
+            # We connected fine (MTU printed above), so this isn't range/sleep —
+            # the device just didn't volunteer a status push. It reliably answers a
+            # command, so on/off confirmations read back state even when this won't.
+            print("Connected, but the device sent no status push "
+                  "(it may not volunteer state while active).")
+
 
 def cmd_control(args):
     config = load_config()
@@ -622,6 +742,27 @@ def cmd_control(args):
         asyncio.run(ble_command(mac, network_key, "off"))
 
 
+def cmd_status(args):
+    config = load_config()
+
+    if not config.get("devices"):
+        print("No devices configured. Run setup first:")
+        print("  python3 bhyve.py setup")
+        sys.exit(1)
+
+    dev_idx = (args.device or 1) - 1
+    if dev_idx < 0 or dev_idx >= len(config["devices"]):
+        print(f"Device {dev_idx+1} not found. You have {len(config['devices'])} device(s).")
+        sys.exit(1)
+
+    dev = config["devices"][dev_idx]
+    mac = args.mac or dev["mac"]
+    network_key = dev["network_key"]
+
+    print(f"B-Hyve Controller — {dev['name']}")
+    asyncio.run(ble_status(mac, network_key))
+
+
 # ─── CLI ─────────────────────────────────────────────────────────────────
 
 def main():
@@ -638,6 +779,7 @@ Control:
   %(prog)s on 1 600          Zone 1 on for 10 minutes (default)
   %(prog)s on 2 60           Zone 2 on for 1 minute
   %(prog)s off               Stop all watering
+  %(prog)s status            Read device telemetry (battery, state)
 
 ⚠️  Do NOT update your B-Hyve firmware — it may break this tool!
         """,
@@ -663,6 +805,11 @@ Control:
     off_p.add_argument("--device", "-d", type=int, help="Device number (if multiple)")
     off_p.add_argument("--mac", help="Override MAC address")
 
+    # Status
+    status_p = sub.add_parser("status", help="Read device telemetry (battery, state)")
+    status_p.add_argument("--device", "-d", type=int, help="Device number (if multiple)")
+    status_p.add_argument("--mac", help="Override MAC address")
+
     args = parser.parse_args()
 
     if args.action == "setup":
@@ -670,6 +817,8 @@ Control:
     elif args.action in ("on", "off"):
         args.command = args.action
         cmd_control(args)
+    elif args.action == "status":
+        cmd_status(args)
     else:
         parser.print_help()
 

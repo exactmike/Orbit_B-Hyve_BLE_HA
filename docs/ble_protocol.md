@@ -122,6 +122,25 @@ consistent with 2×AA). Treat the exact field semantics above as **reconstructed
 vendor-confirmed** — they match one session and should be re-verified against the app UI
 (battery %, next-run time) before being surfaced as authoritative.
 
+### RX push behavior (when the device volunteers data)
+
+Observed live across single-station valves (fw `0111`) and the XD 4-port (fw `0107`):
+
+- **Solicited (reliable).** Whenever the host writes a command on `6c72` (e.g. start/stop),
+  the device answers with a burst that includes a full `#16` status block — so a start/stop
+  reliably reads back the resulting run-state and battery. This is the dependable way to read
+  state.
+- **Unsolicited connect-time push (idle: reliable; active: not).** On connect, an **idle**
+  device reliably pushes a `#16` status (the CLI's `status` command depends on this). While a
+  zone is **actively watering**, the connect-time push is unreliable — sometimes only a minimal
+  clock-bearing ack arrives, sometimes nothing — so a passive mid-run `status` may come up
+  empty even though the connection succeeded.
+
+**Implication / TODO.** A dependable *mid-run* status read needs a benign **"request status"
+TX** to elicit the burst rather than waiting for a volunteered push. The app's timestamp-sync
+message (see "Verifying Your Connection") is a known status-eliciting write and a good RE
+starting point; capture it and add it to the TX command catalog.
+
 ## Notes on Behavior
 
 - **No BLE bonding.** The device does not write to the host's `bt_config.conf` paired-devices table. It does not enforce link-layer pairing or LE Secure Connections.
